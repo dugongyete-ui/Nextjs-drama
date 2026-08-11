@@ -21,10 +21,11 @@ export const CDN_PROXY_PREFIX = "/api/cdn";
 
 /**
  * CDN hosts that serve iQIYI HLS segments.
+ * Primary: data.video.iqiyi.com — serves m3u8 playlists and TS segments.
  * These hosts require CORS proxy + Referer + User-Agent headers.
- * Will be populated once we discover them from m3u8 responses.
  */
 export const IQIYI_CDN_HOSTS = [
+  "data.video.iqiyi.com",
   "cdn-iqiyi.com",
   "iqiyi.com",
   "iq.com",

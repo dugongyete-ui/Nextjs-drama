@@ -167,24 +167,32 @@ const iqiyiApi: PlatformApi = {
   normalizeEpisode: (ep) => iqiyi.normalizeEpisode(ep) as UnifiedEpisode,
   extractList: <T,>(response: Record<string, unknown>) => iqiyi.extractList<T>(response),
   extractLanguages: (response) => iqiyi.extractLanguages(response),
-  // iQIYI episode endpoint returns HLS m3u8 URL
-  getEpisodeVideoUrl: (id, ep, lang) => iqiyi.api.getHLSUrl(id, ep, lang),
+  // iQIYI: getEpisodeVideoUrl constructs the HLS proxy URL
+  // The proxy route handles ?hls=true by fetching the m3u8 and returning rewritten content
+  getEpisodeVideoUrl: (id, ep, lang) =>
+    Promise.resolve(`${iqiyi.IQIYI_PROXY_PREFIX}/episode?id=${encodeURIComponent(String(id))}&ep=${encodeURIComponent(String(ep))}&lang=${encodeURIComponent(lang)}&hls=true`),
   // iQIYI: resolve video URL from normalized episode
   resolveEpisodeVideoUrl: (episode, dramaId, episodeNum) => {
-    // Strategy 1: HLS URL from /episode response (rewrite to go through proxy)
+    // Strategy 1: HLS URL already in episode data (from /allepisode)
+    // These are external URLs — go through our proxy with ?hls=true
+    // so the proxy fetches the m3u8, rewrites CDN URLs, and returns m3u8 content
     if (episode.hlsUrl) {
-      return episode.hlsUrl.replace(
-        new RegExp(`^${iqiyi.IQIYI_API_PREFIX.replace(/\//g, "\\/")}/`, "g"),
-        `${iqiyi.IQIYI_PROXY_PREFIX}/`
-      );
+      // If it's already a local proxy URL, just return it
+      if (episode.hlsUrl.startsWith("/api/")) return episode.hlsUrl;
+      // External URL — route through our episode proxy with hls=true
+      // The proxy will fetch the m3u8 from this URL and rewrite all CDN URLs
+      return `${iqiyi.IQIYI_PROXY_PREFIX}/episode?id=${encodeURIComponent(String(dramaId))}&ep=${encodeURIComponent(String(episodeNum))}&hls=true`;
     }
-    // Strategy 2: Direct MP4 URL
+    // Strategy 2: Direct MP4 URL (rare for iQIYI, but handle it)
     if (episode.mp4Url || episode.videoUrl) {
-      return episode.mp4Url || episode.videoUrl;
+      const url = episode.mp4Url || episode.videoUrl;
+      if (url.startsWith("/api/")) return url;
+      // External MP4 URL — proxy through CDN
+      return `/api/cdn?url=${encodeURIComponent(url)}`;
     }
-    // Strategy 3: Fallback — construct proxy URL for /episode endpoint
-    // The proxy will fetch the m3u8 and rewrite CDN URLs
-    return `${iqiyi.IQIYI_PROXY_PREFIX}/episode?id=${encodeURIComponent(String(dramaId))}&ep=${encodeURIComponent(String(episodeNum))}`;
+    // Strategy 3: Fallback — construct proxy URL for /episode with ?hls=true
+    // The proxy fetches the m3u8 from hlsUrl in the JSON, rewrites URLs, returns m3u8
+    return `${iqiyi.IQIYI_PROXY_PREFIX}/episode?id=${encodeURIComponent(String(dramaId))}&ep=${encodeURIComponent(String(episodeNum))}&hls=true`;
   },
   // iQIYI doesn't have hot rank — fallback to trending
   getHotRank: (_type, lang) => iqiyi.api.getTrending(lang),

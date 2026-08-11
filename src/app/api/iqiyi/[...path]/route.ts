@@ -4,6 +4,8 @@ import {
   IQIYI_API_PREFIX,
   IQIYI_API_KEY,
   IQIYI_PROXY_PREFIX,
+  IQIYI_CDN_REFERER,
+  IQIYI_CDN_USER_AGENT,
 } from "@/lib/platforms/iqiyi/constants";
 
 /**
@@ -11,12 +13,16 @@ import {
  * Proxies all API requests to the external iQIYI API.
  * Handles authentication (API key) server-side.
  *
- * iQIYI CDN has Referer + User-Agent restrictions:
+ * Special handling for /episode endpoint:
+ * - When ?hls=true query param is present, fetches the m3u8 from the hlsUrl
+ *   in the JSON response, rewrites all TS segment URLs to go through our CDN proxy,
+ *   and returns the rewritten m3u8 content directly.
+ * - This allows hls.js to load /api/iqiyi/episode?id=X&ep=Y&hls=true as an m3u8 source.
+ *
+ * iQIYI CDN (data.video.iqiyi.com) requires:
  * - Referer: https://www.iq.com/
  * - User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
- *
- * For m3u8 responses, we rewrite CDN URLs to go through our CDN proxy
- * so the browser can access HLS segments.
+ * - CORS proxy (no Access-Control-Allow-Origin from CDN)
  */
 
 export async function GET(request: NextRequest) {
@@ -27,9 +33,12 @@ export async function GET(request: NextRequest) {
 
   const url = new URL(`${IQIYI_API_BASE}${IQIYI_API_PREFIX}/${pathSegments}`);
 
-  // Forward all query params
+  // Forward all query params (except our custom ones)
+  const isHlsRequest = searchParams.get("hls") === "true";
   searchParams.forEach((value, key) => {
-    url.searchParams.set(key, value);
+    if (key !== "hls") {
+      url.searchParams.set(key, value);
+    }
   });
 
   try {
@@ -43,7 +52,7 @@ export async function GET(request: NextRequest) {
     const text = await res.text();
     const contentType = res.headers.get("content-type") || "";
 
-    // Check if it's HLS m3u8 content — rewrite CDN URLs server-side
+    // Check if it's raw HLS m3u8 content — rewrite CDN URLs server-side
     if (text.startsWith("#EXTM3U") || contentType.includes("mpegurl")) {
       const rewritten = rewriteIqiyiM3u8Urls(text);
       return new NextResponse(rewritten, {
@@ -54,6 +63,63 @@ export async function GET(request: NextRequest) {
           "Access-Control-Allow-Origin": "*",
         },
       });
+    }
+
+    // Special handling for /episode endpoint with ?hls=true
+    // Fetch the m3u8 from hlsUrl in the JSON response, rewrite, and return as m3u8
+    if (isHlsRequest && pathSegments === "episode") {
+      try {
+        const json = JSON.parse(text);
+        const hlsUrl = json.hlsUrl || json.m3u8Url || json.videoUrl || "";
+
+        if (hlsUrl) {
+          // Fetch the actual m3u8 content from the HLS URL
+          const m3u8Res = await fetch(hlsUrl, {
+            headers: {
+              "Referer": IQIYI_CDN_REFERER,
+              "User-Agent": IQIYI_CDN_USER_AGENT,
+            },
+          });
+
+          let m3u8Content = await m3u8Res.text();
+
+          // If the response is itself an m3u8, rewrite URLs
+          if (m3u8Content.startsWith("#EXTM3U")) {
+            m3u8Content = rewriteIqiyiM3u8Urls(m3u8Content);
+          } else {
+            // Might be another JSON with a URL — try to parse
+            try {
+              const innerJson = JSON.parse(m3u8Content);
+              const innerUrl = innerJson.hlsUrl || innerJson.m3u8Url || innerJson.url || "";
+              if (innerUrl) {
+                const innerRes = await fetch(innerUrl, {
+                  headers: {
+                    "Referer": IQIYI_CDN_REFERER,
+                    "User-Agent": IQIYI_CDN_USER_AGENT,
+                  },
+                });
+                m3u8Content = await innerRes.text();
+                if (m3u8Content.startsWith("#EXTM3U")) {
+                  m3u8Content = rewriteIqiyiM3u8Urls(m3u8Content);
+                }
+              }
+            } catch {
+              // Not JSON, return as-is
+            }
+          }
+
+          return new NextResponse(m3u8Content, {
+            status: 200,
+            headers: {
+              "Content-Type": "application/vnd.apple.mpegurl",
+              "Cache-Control": "no-cache",
+              "Access-Control-Allow-Origin": "*",
+            },
+          });
+        }
+      } catch {
+        // Failed to parse episode response or fetch m3u8 — fall through to return JSON
+      }
     }
 
     // JSON or other content
@@ -76,41 +142,31 @@ export async function GET(request: NextRequest) {
 /**
  * Rewrite URLs in iQIYI m3u8 playlists.
  *
- * iQIYI CDN URLs need to go through our CDN proxy because:
+ * iQIYI CDN URLs (data.video.iqiyi.com) need to go through our CDN proxy because:
  * 1. CDN doesn't have CORS headers (Access-Control-Allow-Origin)
  * 2. CDN requires Referer: https://www.iq.com/
  * 3. CDN requires specific User-Agent
  *
- * We rewrite absolute CDN URLs to /api/cdn/<host>/<path>
- * so our CDN proxy adds the required headers.
+ * We rewrite ALL absolute https:// URLs in the m3u8 to go through
+ * /api/cdn?url=<encoded> so our CDN proxy adds the required headers.
+ *
+ * This catch-all approach ensures we handle any CDN host iQIYI uses,
+ * including data.video.iqiyi.com and any subdomains.
  */
 function rewriteIqiyiM3u8Urls(m3u8: string): string {
-  let result = m3u8;
+  // Rewrite ALL absolute URLs to go through our CDN proxy
+  // Match https://<host>/<path> patterns in the m3u8
+  // Using query-based CDN proxy format: /api/cdn?url=<encoded>
+  return m3u8.replace(
+    /https?:\/\/[^\s"']+/g,
+    (match) => {
+      // Don't rewrite our own proxy URLs
+      if (match.startsWith("/api/")) return match;
 
-  // Rewrite iQIYI API-relative paths → local proxy
-  // /api/iqiyi/episode?id=... → /api/iqiyi/episode?id=...
-  // (already correct since we're the proxy, but handle if API returns full URLs)
-  result = result.replace(
-    new RegExp(`https?://[^/]+${IQIYI_API_PREFIX.replace(/\//g, "\\/")}/`, "g"),
-    `${IQIYI_PROXY_PREFIX}/`
+      // Use query-based CDN proxy format
+      return `/api/cdn?url=${encodeURIComponent(match)}`;
+    }
   );
-
-  // Rewrite known iQIYI CDN hosts → CDN proxy
-  const iqiyiCdnHosts = ["cdn-iqiyi.com", "iqiyi.com", "iq.com"];
-  for (const host of iqiyiCdnHosts) {
-    const escaped = host.replace(/\./g, "\\.");
-    // Match https://<cdn-host>/<path> and rewrite to /api/cdn/<cdn-host>/<path>
-    result = result.replace(
-      new RegExp(`https://${escaped}/`, "g"),
-      `/api/cdn/${host}/`
-    );
-    result = result.replace(
-      new RegExp(`http://${escaped}/`, "g"),
-      `/api/cdn/${host}/`
-    );
-  }
-
-  return result;
 }
 
 // Handle OPTIONS for CORS preflight

@@ -21,6 +21,36 @@ const nextConfig: NextConfig = {
         search: "",
       },
     ],
+    remotePatterns: [
+      // iQIYI image CDN
+      {
+        protocol: "https",
+        hostname: "**.iqiyi.com",
+      },
+      {
+        protocol: "https",
+        hostname: "**.iq.com",
+      },
+      // DramaBox CDN images
+      {
+        protocol: "https",
+        hostname: "**.dramaboxdb.com",
+      },
+      // PineDrama/TikTok CDN images
+      {
+        protocol: "https",
+        hostname: "**.tiktokcdn.com",
+      },
+      {
+        protocol: "https",
+        hostname: "**.tiktokv.com",
+      },
+      // Generic cover images (many APIs use various CDNs)
+      {
+        protocol: "https",
+        hostname: "**.cloudfront.net",
+      },
+    ],
   },
 };
 
