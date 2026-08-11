@@ -2,11 +2,12 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 /** Supported platforms */
-export type Platform = "dramabox" | "pinedrama";
+export type Platform = "dramabox" | "pinedrama" | "iqiyi";
 
 export const PLATFORMS: { id: Platform; name: string; logo: string }[] = [
   { id: "dramabox", name: "DramaBox", logo: "/dramabox-logo.png" },
   { id: "pinedrama", name: "PineDrama", logo: "/pinedrama-logo.png" },
+  { id: "iqiyi", name: "iQIYI", logo: "/iqiyi-logo.png" },
 ];
 
 interface AppState {

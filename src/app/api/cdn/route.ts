@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isCdnHostAllowed } from "@/lib/proxy/cdn-proxy";
 import { CORS_CAPABLE_CDN_HOSTS } from "@/lib/proxy/m3u8-rewriter";
+import { IQIYI_CDN_HOSTS, IQIYI_CDN_REFERER, IQIYI_CDN_USER_AGENT } from "@/lib/platforms/iqiyi/constants";
 
 /**
  * CDN Proxy — query-based format (PineDrama/TikTok CDN).
@@ -57,6 +58,16 @@ async function handleProxyRequest(request: NextRequest, targetUrl: string) {
     const headers: Record<string, string> = {
       "User-Agent": "DramaBox-Proxy/1.0",
     };
+
+    // iQIYI CDN requires Referer + specific User-Agent
+    const isIqiyiCdn = IQIYI_CDN_HOSTS.some(
+      (host) => parsedUrl.hostname === host || parsedUrl.hostname.endsWith(`.${host}`)
+    );
+    if (isIqiyiCdn) {
+      headers["Referer"] = IQIYI_CDN_REFERER;
+      headers["User-Agent"] = IQIYI_CDN_USER_AGENT;
+      headers["Origin"] = "https://www.iq.com";
+    }
     const rangeHeader = request.headers.get("Range");
     if (rangeHeader) {
       headers["Range"] = rangeHeader;

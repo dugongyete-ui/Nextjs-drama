@@ -5,11 +5,13 @@
 
 import { DRAMABOX_CDN_HOSTS, CDN_PROXY_PREFIX } from "../platforms/dramabox/constants";
 import { PINEDRAMA_CDN_HOSTS } from "../platforms/pinedrama/constants";
+import { IQIYI_CDN_HOSTS } from "../platforms/iqiyi/constants";
 
-/** CDN hosts allowed for proxying (DramaBox + PineDrama/TikTok CDN hosts) */
+/** CDN hosts allowed for proxying (DramaBox + PineDrama/TikTok + iQIYI CDN hosts) */
 export const ALLOWED_CDN_HOSTS: readonly string[] = [
   ...DRAMABOX_CDN_HOSTS,
   ...PINEDRAMA_CDN_HOSTS,
+  ...IQIYI_CDN_HOSTS,
 ];
 
 /** CDN proxy route prefix (e.g., "/api/cdn") */

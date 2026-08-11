@@ -16,6 +16,10 @@ const nextConfig: NextConfig = {
         pathname: "/pinedrama-logo.png",
         search: "",
       },
+      {
+        pathname: "/iqiyi-logo.png",
+        search: "",
+      },
     ],
   },
 };

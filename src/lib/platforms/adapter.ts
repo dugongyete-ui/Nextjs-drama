@@ -9,6 +9,7 @@
 import { useAppStore, type Platform } from "@/lib/store";
 import * as dramabox from "@/lib/platforms/dramabox";
 import * as pinedrama from "@/lib/platforms/pinedrama";
+import * as iqiyi from "@/lib/platforms/iqiyi";
 
 // ---- Unified Types ----
 export interface UnifiedDrama {
@@ -154,10 +155,54 @@ const pinedramaApi: PlatformApi = {
   extractCategories: (response) => pinedrama.extractCategories(response as Record<string, unknown>),
 };
 
+// ---- iQIYI Adapter ----
+const iqiyiApi: PlatformApi = {
+  getLanguages: () => iqiyi.api.getLanguages(),
+  getTrending: (_page, lang) => iqiyi.api.getTrending(lang),
+  getForYou: (_page, lang) => iqiyi.api.getForYou(lang),
+  getDetail: (id, lang) => iqiyi.api.getDetail(id, lang),
+  getAllEpisodes: (id, lang) => iqiyi.api.getAllEpisodes(id, lang),
+  search: (query, lang) => iqiyi.api.search(query, lang),
+  normalizeDrama: (item) => iqiyi.normalizeDrama(item) as UnifiedDrama,
+  normalizeEpisode: (ep) => iqiyi.normalizeEpisode(ep) as UnifiedEpisode,
+  extractList: <T,>(response: Record<string, unknown>) => iqiyi.extractList<T>(response),
+  extractLanguages: (response) => iqiyi.extractLanguages(response),
+  // iQIYI episode endpoint returns HLS m3u8 URL
+  getEpisodeVideoUrl: (id, ep, lang) => iqiyi.api.getHLSUrl(id, ep, lang),
+  // iQIYI: resolve video URL from normalized episode
+  resolveEpisodeVideoUrl: (episode, dramaId, episodeNum) => {
+    // Strategy 1: HLS URL from /episode response (rewrite to go through proxy)
+    if (episode.hlsUrl) {
+      return episode.hlsUrl.replace(
+        new RegExp(`^${iqiyi.IQIYI_API_PREFIX.replace(/\//g, "\\/")}/`, "g"),
+        `${iqiyi.IQIYI_PROXY_PREFIX}/`
+      );
+    }
+    // Strategy 2: Direct MP4 URL
+    if (episode.mp4Url || episode.videoUrl) {
+      return episode.mp4Url || episode.videoUrl;
+    }
+    // Strategy 3: Fallback — construct proxy URL for /episode endpoint
+    // The proxy will fetch the m3u8 and rewrite CDN URLs
+    return `${iqiyi.IQIYI_PROXY_PREFIX}/episode?id=${encodeURIComponent(String(dramaId))}&ep=${encodeURIComponent(String(episodeNum))}`;
+  },
+  // iQIYI doesn't have hot rank — fallback to trending
+  getHotRank: (_type, lang) => iqiyi.api.getTrending(lang),
+  // iQIYI doesn't have a separate recommended endpoint — fallback to forYou
+  getRecommended: (_page, lang) => iqiyi.api.getForYou(lang),
+  // iQIYI browse: use /browse with optional category (cid)
+  getBrowse: (page, lang, category?) =>
+    iqiyi.api.getBrowse(page, lang, category),
+  // iQIYI categories: use /categories
+  getCategories: () => iqiyi.api.getCategories(),
+  extractCategories: (response) => iqiyi.extractCategories(response as Record<string, unknown>),
+};
+
 // ---- Platform Map ----
 const platformApis: Record<Platform, PlatformApi> = {
   dramabox: dramaboxApi,
   pinedrama: pinedramaApi,
+  iqiyi: iqiyiApi,
 };
 
 /**
