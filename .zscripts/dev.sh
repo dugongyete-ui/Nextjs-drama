@@ -1,154 +1,141 @@
 #!/bin/bash
+# Custom dev script for Z.ai sandbox
+# Called by /start.sh during sandbox boot.
+# Starts Next.js standalone server with env vars + watchdog in background.
 
-set -euo pipefail
+echo "[DEV] Starting Next.js server..."
+cd /home/z/my-project
 
-# 获取脚本所在目录（.zscripts）
-# 使用 $0 获取脚本路径（与 build.sh 保持一致）
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-log_step_start() {
-	local step_name="$1"
-	echo "=========================================="
-	echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting: $step_name"
-	echo "=========================================="
-	export STEP_START_TIME
-	STEP_START_TIME=$(date +%s)
-}
-
-log_step_end() {
-	local step_name="${1:-Unknown step}"
-	local end_time
-	end_time=$(date +%s)
-	local duration=$((end_time - STEP_START_TIME))
-	echo "=========================================="
-	echo "[$(date '+%Y-%m-%d %H:%M:%S')] Completed: $step_name"
-	echo "[LOG] Step: $step_name | Duration: ${duration}s"
-	echo "=========================================="
-	echo ""
-}
-
-start_mini_services() {
-	local mini_services_dir="$PROJECT_DIR/mini-services"
-	local started_count=0
-
-	log_step_start "Starting mini-services"
-	if [ ! -d "$mini_services_dir" ]; then
-		echo "Mini-services directory not found, skipping..."
-		log_step_end "Starting mini-services"
-		return 0
-	fi
-
-	echo "Found mini-services directory, scanning for sub-services..."
-
-	for service_dir in "$mini_services_dir"/*; do
-		if [ ! -d "$service_dir" ]; then
-			continue
-		fi
-
-		local service_name
-		service_name=$(basename "$service_dir")
-		echo "Checking service: $service_name"
-
-		if [ ! -f "$service_dir/package.json" ]; then
-			echo "[$service_name] No package.json found, skipping..."
-			continue
-		fi
-
-		if ! grep -q '"dev"' "$service_dir/package.json"; then
-			echo "[$service_name] No dev script found, skipping..."
-			continue
-		fi
-
-		echo "Starting $service_name in background..."
-		(
-			cd "$service_dir"
-			echo "[$service_name] Installing dependencies..."
-			bun install
-			echo "[$service_name] Running bun run dev..."
-			exec bun run dev
-		) >"$PROJECT_DIR/.zscripts/mini-service-${service_name}.log" 2>&1 &
-
-		local service_pid=$!
-		echo "[$service_name] Started in background (PID: $service_pid)"
-		echo "[$service_name] Log: $PROJECT_DIR/.zscripts/mini-service-${service_name}.log"
-		disown "$service_pid" 2>/dev/null || true
-		started_count=$((started_count + 1))
-	done
-
-	echo "Mini-services startup completed. Started $started_count service(s)."
-	log_step_end "Starting mini-services"
-}
-
-wait_for_service() {
-	local host="$1"
-	local port="$2"
-	local service_name="$3"
-	local max_attempts="${4:-60}"
-	local attempt=1
-
-	echo "Waiting for $service_name to be ready on $host:$port..."
-
-	while [ "$attempt" -le "$max_attempts" ]; do
-		if curl -s --connect-timeout 2 --max-time 5 "http://$host:$port" >/dev/null 2>&1; then
-			echo "$service_name is ready!"
-			return 0
-		fi
-
-		echo "Attempt $attempt/$max_attempts: $service_name not ready yet, waiting..."
-		sleep 1
-		attempt=$((attempt + 1))
-	done
-
-	echo "ERROR: $service_name failed to start within $max_attempts seconds"
-	return 1
-}
-
-cleanup() {
-	if [ -n "${DEV_PID:-}" ] && kill -0 "$DEV_PID" >/dev/null 2>&1; then
-		echo "Stopping Next.js dev server (PID: $DEV_PID)..."
-		kill "$DEV_PID" >/dev/null 2>&1 || true
-	fi
-}
-
-trap cleanup EXIT INT TERM
-
-cd "$PROJECT_DIR"
-
-if ! command -v bun >/dev/null 2>&1; then
-	echo "ERROR: bun is not installed or not in PATH"
-	exit 1
+# Load environment variables from .env.local
+if [ -f ".env.local" ]; then
+  echo "[DEV] Loading .env.local..."
+  set -a
+  source .env.local
+  set +a
 fi
 
-log_step_start "bun install"
-echo "[BUN] Installing dependencies..."
-bun install
-log_step_end "bun install"
+# Install dependencies if needed
+if [ ! -d "node_modules" ]; then
+  echo "[DEV] Installing dependencies..."
+  bun install 2>/dev/null || npm install
+fi
 
-log_step_start "bun run db:push"
-echo "[BUN] Setting up database..."
-bun run db:push
-log_step_end "bun run db:push"
+# Build if standalone server doesn't exist
+if [ ! -f ".next/standalone/server.js" ]; then
+  echo "[DEV] Building Next.js..."
+  npx next build
+fi
 
-log_step_start "Starting Next.js dev server"
-echo "[BUN] Starting development server..."
-bun run dev &
-DEV_PID=$!
-log_step_end "Starting Next.js dev server"
+# Export env vars needed by the server
+export PORT=3000
+export HOSTNAME=0.0.0.0
 
-log_step_start "Waiting for Next.js dev server"
-wait_for_service "localhost" "3000" "Next.js dev server"
-log_step_end "Waiting for Next.js dev server"
+# Start server using double-fork daemon pattern for persistence
+# (Simple nohup/background doesn't survive tini process reaping)
+echo "[DEV] Launching server daemon..."
+python3 -c "
+import os, sys, time
 
-log_step_start "Health check"
-echo "[BUN] Performing health check..."
-curl -fsS localhost:3000 >/dev/null
-echo "[BUN] Health check passed"
-log_step_end "Health check"
+# Load .env.local
+env_overrides = {}
+try:
+    with open('/home/z/my-project/.env.local') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                key, _, value = line.partition('=')
+                env_overrides[key.strip()] = value.strip()
+except: pass
 
-start_mini_services
+# Double-fork daemon
+pid = os.fork()
+if pid > 0: sys.exit(0)
+os.setsid()
+pid2 = os.fork()
+if pid2 > 0: sys.exit(0)
 
-echo "Next.js dev server is running in background (PID: $DEV_PID)."
-echo "Use 'kill $DEV_PID' to stop it."
-disown "$DEV_PID" 2>/dev/null || true
-unset DEV_PID
+with open('/home/z/my-project/server.pid', 'w') as f:
+    f.write(str(os.getpid()))
+
+os.chdir('/home/z/my-project')
+for k, v in env_overrides.items():
+    os.environ[k] = v
+os.environ['PORT'] = '3000'
+os.environ['HOSTNAME'] = '0.0.0.0'
+
+with open('/home/z/my-project/server.log', 'a') as f:
+    f.write(f'[{time.strftime(\"%Y-%m-%d %H:%M:%S\")}] Server daemon started with env: {list(env_overrides.keys())}\n')
+
+os.execvp('node', ['node', '.next/standalone/server.js'])
+"
+
+# Wait for server to be ready
+echo "[DEV] Waiting for server to start..."
+for i in $(seq 1 30); do
+  if ss -tlnp | grep -q ":3000 "; then
+    echo "[DEV] Server is listening on port 3000"
+    break
+  fi
+  sleep 1
+done
+
+# Start watchdog daemon
+echo "[DEV] Starting watchdog daemon..."
+python3 -c "
+import os, sys, time
+
+env_overrides = {}
+try:
+    with open('/home/z/my-project/.env.local') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                key, _, value = line.partition('=')
+                env_overrides[key.strip()] = value.strip()
+except: pass
+
+pid = os.fork()
+if pid > 0: sys.exit(0)
+os.setsid()
+pid2 = os.fork()
+if pid2 > 0: sys.exit(0)
+
+LOG = '/home/z/my-project/watchdog.log'
+with open('/home/z/my-project/watchdog.pid', 'w') as f:
+    f.write(str(os.getpid()))
+
+def log(msg):
+    with open(LOG, 'a') as f:
+        f.write(f'[{time.strftime(\"%Y-%m-%d %H:%M:%S\")}] {msg}\n')
+
+log('Watchdog started')
+
+while True:
+    time.sleep(10)
+    try:
+        with open('/home/z/my-project/server.pid', 'r') as f:
+            spid = int(f.read().strip())
+        os.kill(spid, 0)
+    except:
+        log('Server dead, restarting...')
+        pid = os.fork()
+        if pid == 0:
+            os.setsid()
+            pid2 = os.fork()
+            if pid2 == 0:
+                os.chdir('/home/z/my-project')
+                for k, v in env_overrides.items():
+                    os.environ[k] = v
+                os.environ['PORT'] = '3000'
+                os.environ['HOSTNAME'] = '0.0.0.0'
+                os.execvp('node', ['node', '.next/standalone/server.js'])
+            else:
+                with open('/home/z/my-project/server.pid', 'w') as f:
+                    f.write(str(pid2))
+                os._exit(0)
+        else:
+            os.waitpid(pid, 0)
+            log('Server restart initiated')
+" &
+
+echo "[DEV] Dev script completed (server + watchdog running in background)"
