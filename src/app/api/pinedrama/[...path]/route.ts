@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
         // PineDrama requires User-Agent — Cloudflare blocks without it
         "User-Agent": "DramaBox-App/2.0",
       },
+      signal: AbortSignal.timeout(30_000),
     });
 
     const text = await res.text();

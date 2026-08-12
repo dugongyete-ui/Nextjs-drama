@@ -54,18 +54,19 @@ export default function WatchPage() {
     [episodeList, ep]
   );
 
-  // Try to resolve video URL from normalized episode data first (works for both platforms)
-  // PineDrama: /allepisode now returns videoUrl + qualityList per episode
+  // Try to resolve video URL from normalized episode data first (works for all platforms)
   // DramaBox: V2 API returns mp4Url/videoUrl per episode
-  const isPineDrama = platform === "pinedrama";
+  // PineDrama: /allepisode returns videoUrl + qualityList per episode
+  // iQIYI: resolveEpisodeVideoUrl constructs proxy URL with ?hls=true
   const resolvedUrl = useMemo(() => {
     if (!currentEpisode || !platformApi.resolveEpisodeVideoUrl) return null;
     return platformApi.resolveEpisodeVideoUrl(currentEpisode, id, ep);
   }, [currentEpisode, id, ep, platformApi]);
 
-  // Fallback for PineDrama: if resolveEpisodeVideoUrl returns null,
-  // fetch video URL via /episode endpoint (extra API call)
-  const needsFallbackFetch = isPineDrama && !resolvedUrl;
+  // Fallback: if resolveEpisodeVideoUrl returns null,
+  // fetch video URL via getEpisodeVideoUrl (extra API call)
+  // Used by PineDrama (no URL in /allepisode) and potentially iQIYI
+  const needsFallbackFetch = !resolvedUrl;
   const { data: fallbackVideoUrl, isLoading: fallbackVideoLoading } = useQuery({
     queryKey: ["episodeVideoUrl", platform, id, ep, lang],
     queryFn: () => platformApi.getEpisodeVideoUrl!(id, ep, lang),
@@ -77,9 +78,8 @@ export default function WatchPage() {
     // Use resolved URL from episode data (preferred — no extra API call)
     if (resolvedUrl) return resolvedUrl;
     // Fallback: URL fetched from /episode endpoint
-    if (isPineDrama) return fallbackVideoUrl || null;
-    return null;
-  }, [resolvedUrl, isPineDrama, fallbackVideoUrl]);
+    return fallbackVideoUrl || null;
+  }, [resolvedUrl, fallbackVideoUrl]);
 
   const hlsLoading = !episodesData || (needsFallbackFetch && fallbackVideoLoading);
 

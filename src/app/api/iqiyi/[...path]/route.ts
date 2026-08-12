@@ -47,6 +47,7 @@ export async function GET(request: NextRequest) {
         "X-API-Key": IQIYI_API_KEY,
         "Content-Type": "application/json",
       },
+      signal: AbortSignal.timeout(30_000),
     });
 
     const text = await res.text();
@@ -96,6 +97,7 @@ export async function GET(request: NextRequest) {
               "Referer": IQIYI_CDN_REFERER,
               "User-Agent": IQIYI_CDN_USER_AGENT,
             },
+            signal: AbortSignal.timeout(30_000),
           });
 
           let fetchedContent = await m3u8Res.text();

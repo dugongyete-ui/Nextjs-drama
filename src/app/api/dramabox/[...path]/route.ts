@@ -27,6 +27,7 @@ export async function GET(request: NextRequest) {
         "X-API-Key": DRAMABOX_API_KEY,
         "Content-Type": "application/json",
       },
+      signal: AbortSignal.timeout(30_000),
     });
 
     const text = await res.text();

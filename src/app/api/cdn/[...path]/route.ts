@@ -102,7 +102,7 @@ async function handleProxyRequest(request: NextRequest, targetUrl: string) {
       headers["Range"] = rangeHeader;
     }
 
-    const res = await fetch(targetUrl, { headers });
+    const res = await fetch(targetUrl, { headers, signal: AbortSignal.timeout(30_000) });
 
     // Determine the correct content type for the response
     let responseContentType = res.headers.get("content-type") || "";
