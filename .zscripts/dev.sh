@@ -26,6 +26,14 @@ if [ ! -f ".next/standalone/server.js" ]; then
   npx next build
 fi
 
+# CRITICAL: Copy static files (CSS, JS, images) to standalone directory
+# Without these, the site renders as unstyled raw HTML
+echo "[DEV] Ensuring static files are in standalone directory..."
+mkdir -p .next/standalone/.next/static
+cp -rn .next/static/* .next/standalone/.next/static/ 2>/dev/null
+cp -rn public/* .next/standalone/public/ 2>/dev/null || (mkdir -p .next/standalone/public && cp -r public/* .next/standalone/public/)
+echo "[DEV] Static files synced"
+
 # Export env vars needed by the server
 export PORT=3000
 export HOSTNAME=0.0.0.0
