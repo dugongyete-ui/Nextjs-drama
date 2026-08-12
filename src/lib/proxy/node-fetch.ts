@@ -47,6 +47,9 @@ export function nodeFetch(
         method: "GET",
         headers,
         timeout,
+        // Force HTTP/1.1 — Cloudflare/CDN rejects HTTP/2 from server-side,
+        // causing timeouts. HTTP/1.1 works reliably.
+        ...(isHttps ? { agent: new https.Agent({ keepAlive: true, maxSockets: 10 }) } : {}),
       },
       (res) => {
         const chunks: Buffer[] = [];

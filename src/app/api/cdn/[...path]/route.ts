@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isCdnHostAllowed, CDN_PROXY_PREFIX } from "@/lib/proxy/cdn-proxy";
 import { CORS_CAPABLE_CDN_HOSTS } from "@/lib/proxy/m3u8-rewriter";
 import { IQIYI_CDN_HOSTS, IQIYI_CDN_REFERER, IQIYI_CDN_USER_AGENT } from "@/lib/platforms/iqiyi/constants";
+import { nodeFetch } from "@/lib/proxy/node-fetch";
 
 /**
  * CDN Proxy — forwards requests to DramaBox and PineDrama/TikTok CDNs.
@@ -102,7 +103,7 @@ async function handleProxyRequest(request: NextRequest, targetUrl: string) {
       headers["Range"] = rangeHeader;
     }
 
-    const res = await fetch(targetUrl, { headers, signal: AbortSignal.timeout(30_000) });
+    const res = await nodeFetch(targetUrl, { headers, timeout: 30_000 });
 
     // Determine the correct content type for the response
     let responseContentType = res.headers.get("content-type") || "";

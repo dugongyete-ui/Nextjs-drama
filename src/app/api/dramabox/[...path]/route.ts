@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { DRAMABOX_API_BASE, DRAMABOX_API_PREFIX, DRAMABOX_API_KEY, DRAMABOX_PROXY_PREFIX } from "@/lib/platforms/dramabox/constants";
 import { rewriteM3u8Urls } from "@/lib/proxy/m3u8-rewriter";
+import { nodeFetch } from "@/lib/proxy/node-fetch";
 
 /**
  * DramaBox API Proxy
  * Proxies all API requests to the external DramaBox API.
  * Handles authentication (API key) and m3u8 URL rewriting server-side.
+ *
+ * Uses nodeFetch (node:https) instead of undici fetch() for resilience —
+ * undici fetch uses HTTP/2 which times out against Cloudflare CDN.
+ * node:https uses HTTP/1.1 which works reliably.
  */
 
 export async function GET(request: NextRequest) {
@@ -22,12 +27,12 @@ export async function GET(request: NextRequest) {
   });
 
   try {
-    const res = await fetch(url.toString(), {
+    const res = await nodeFetch(url.toString(), {
       headers: {
         "X-API-Key": DRAMABOX_API_KEY,
         "Content-Type": "application/json",
       },
-      signal: AbortSignal.timeout(30_000),
+      timeout: 30_000,
     });
 
     const text = await res.text();
@@ -48,7 +53,7 @@ export async function GET(request: NextRequest) {
 
     // JSON or other content
     return new NextResponse(text, {
-      status: res.status,
+      status: res.statusAok ? 200 : res.status,
       headers: {
         "Content-Type": contentType || "application/json",
         "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",

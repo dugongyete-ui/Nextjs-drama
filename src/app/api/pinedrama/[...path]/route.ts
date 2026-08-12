@@ -5,12 +5,17 @@ import {
   PINEDRAMA_API_KEY,
   PINEDRAMA_PROXY_PREFIX,
 } from "@/lib/platforms/pinedrama/constants";
+import { nodeFetch } from "@/lib/proxy/node-fetch";
 
 /**
  * PineDrama API Proxy
  * Proxies all API requests to the external PineDrama API.
  * Handles authentication (API key) and adds User-Agent for Cloudflare.
  * PineDrama uses direct MP4 (no HLS/m3u8), so no m3u8 rewriting needed.
+ *
+ * Uses nodeFetch (node:https) instead of undici fetch() for resilience —
+ * undici fetch uses HTTP/2 which times out against Cloudflare CDN.
+ * node:https uses HTTP/1.1 which works reliably.
  */
 
 export async function GET(request: NextRequest) {
@@ -27,14 +32,14 @@ export async function GET(request: NextRequest) {
   });
 
   try {
-    const res = await fetch(url.toString(), {
+    const res = await nodeFetch(url.toString(), {
       headers: {
         "X-API-Key": PINEDRAMA_API_KEY,
         "Content-Type": "application/json",
         // PineDrama requires User-Agent — Cloudflare blocks without it
         "User-Agent": "DramaBox-App/2.0",
       },
-      signal: AbortSignal.timeout(30_000),
+      timeout: 30_000,
     });
 
     const text = await res.text();
@@ -42,7 +47,7 @@ export async function GET(request: NextRequest) {
 
     // JSON or other content
     return new NextResponse(text, {
-      status: res.status,
+      status: res.ok ? 200 : res.status,
       headers: {
         "Content-Type": contentType || "application/json",
         "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
