@@ -7,22 +7,21 @@ import {
   IQIYI_CDN_REFERER,
   IQIYI_CDN_USER_AGENT,
 } from "@/lib/platforms/iqiyi/constants";
+import { nodeFetch } from "@/lib/proxy/node-fetch";
 
 /**
  * iQIYI API Proxy
  * Proxies all API requests to the external iQIYI API.
  * Handles authentication (API key) server-side.
  *
+ * Uses nodeFetch (node:https) instead of undici fetch() for resilience —
+ * undici fetch can crash the process when the external API is slow/unreachable.
+ *
  * Special handling for /episode endpoint:
  * - When ?hls=true query param is present, fetches the m3u8 from the hlsUrl
  *   in the JSON response, rewrites all TS segment URLs to go through our CDN proxy,
  *   and returns the rewritten m3u8 content directly.
  * - This allows hls.js to load /api/iqiyi/episode?id=X&ep=Y&hls=true as an m3u8 source.
- *
- * iQIYI CDN (data.video.iqiyi.com) requires:
- * - Referer: https://www.iq.com/
- * - User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
- * - CORS proxy (no Access-Control-Allow-Origin from CDN)
  */
 
 export async function GET(request: NextRequest) {
@@ -42,12 +41,12 @@ export async function GET(request: NextRequest) {
   });
 
   try {
-    const res = await fetch(url.toString(), {
+    const res = await nodeFetch(url.toString(), {
       headers: {
         "X-API-Key": IQIYI_API_KEY,
         "Content-Type": "application/json",
       },
-      signal: AbortSignal.timeout(30_000),
+      timeout: 60_000,
     });
 
     const text = await res.text();
@@ -67,9 +66,6 @@ export async function GET(request: NextRequest) {
     }
 
     // Special handling for /episode endpoint with ?hls=true
-    // The iQIYI episode API returns JSON with a `m3u8` field containing
-    // the FULL m3u8 playlist content as a string (not a URL).
-    // We extract it, rewrite CDN URLs, and return as m3u8.
     if (isHlsRequest && pathSegments === "episode") {
       try {
         const json = JSON.parse(text);
@@ -91,18 +87,16 @@ export async function GET(request: NextRequest) {
         // Case 2: `hlsUrl` or `m3u8Url` contains a URL to fetch m3u8 from
         const hlsUrl = json.hlsUrl || json.m3u8Url || json.videoUrl || "";
         if (hlsUrl) {
-          // Fetch the actual m3u8 content from the HLS URL
-          const m3u8Res = await fetch(hlsUrl, {
+          const m3u8Res = await nodeFetch(hlsUrl, {
             headers: {
               "Referer": IQIYI_CDN_REFERER,
               "User-Agent": IQIYI_CDN_USER_AGENT,
             },
-            signal: AbortSignal.timeout(30_000),
+            timeout: 60_000,
           });
 
           let fetchedContent = await m3u8Res.text();
 
-          // If the response is itself an m3u8, rewrite URLs
           if (fetchedContent.startsWith("#EXTM3U")) {
             fetchedContent = rewriteIqiyiM3u8Urls(fetchedContent);
             return new NextResponse(fetchedContent, {
@@ -115,7 +109,6 @@ export async function GET(request: NextRequest) {
             });
           }
 
-          // Might be another JSON with a URL or m3u8 content
           try {
             const innerJson = JSON.parse(fetchedContent);
             const innerM3u8 = innerJson.m3u8 || "";
@@ -135,7 +128,6 @@ export async function GET(request: NextRequest) {
           }
         }
 
-        // No m3u8 content found — return error
         return NextResponse.json(
           { error: "No m3u8 content found in episode response" },
           { status: 502 }
@@ -164,29 +156,13 @@ export async function GET(request: NextRequest) {
 
 /**
  * Rewrite URLs in iQIYI m3u8 playlists.
- *
- * iQIYI CDN URLs (data.video.iqiyi.com) need to go through our CDN proxy because:
- * 1. CDN doesn't have CORS headers (Access-Control-Allow-Origin)
- * 2. CDN requires Referer: https://www.iq.com/
- * 3. CDN requires specific User-Agent
- *
- * We rewrite ALL absolute https:// URLs in the m3u8 to go through
- * /api/cdn?url=<encoded> so our CDN proxy adds the required headers.
- *
- * This catch-all approach ensures we handle any CDN host iQIYI uses,
- * including data.video.iqiyi.com and any subdomains.
+ * All CDN URLs go through /api/cdn?url=<encoded> for CORS + Referer + UA headers.
  */
 function rewriteIqiyiM3u8Urls(m3u8: string): string {
-  // Rewrite ALL absolute URLs to go through our CDN proxy
-  // Match https://<host>/<path> patterns in the m3u8
-  // Using query-based CDN proxy format: /api/cdn?url=<encoded>
   return m3u8.replace(
     /https?:\/\/[^\s"']+/g,
     (match) => {
-      // Don't rewrite our own proxy URLs
       if (match.startsWith("/api/")) return match;
-
-      // Use query-based CDN proxy format
       return `/api/cdn?url=${encodeURIComponent(match)}`;
     }
   );
@@ -199,7 +175,6 @@ export async function OPTIONS() {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Range",
       "Access-Control-Max-Age": "86400",
     },
   });
