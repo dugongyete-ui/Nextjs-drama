@@ -66,12 +66,29 @@ export async function GET(request: NextRequest) {
     }
 
     // Special handling for /episode endpoint with ?hls=true
-    // Fetch the m3u8 from hlsUrl in the JSON response, rewrite, and return as m3u8
+    // The iQIYI episode API returns JSON with a `m3u8` field containing
+    // the FULL m3u8 playlist content as a string (not a URL).
+    // We extract it, rewrite CDN URLs, and return as m3u8.
     if (isHlsRequest && pathSegments === "episode") {
       try {
         const json = JSON.parse(text);
-        const hlsUrl = json.hlsUrl || json.m3u8Url || json.videoUrl || "";
 
+        // Case 1: `m3u8` field contains the full m3u8 content as a string
+        const m3u8Content = json.m3u8 || "";
+        if (m3u8Content && typeof m3u8Content === "string" && m3u8Content.includes("#EXTM3U")) {
+          const rewritten = rewriteIqiyiM3u8Urls(m3u8Content);
+          return new NextResponse(rewritten, {
+            status: 200,
+            headers: {
+              "Content-Type": "application/vnd.apple.mpegurl",
+              "Cache-Control": "no-cache",
+              "Access-Control-Allow-Origin": "*",
+            },
+          });
+        }
+
+        // Case 2: `hlsUrl` or `m3u8Url` contains a URL to fetch m3u8 from
+        const hlsUrl = json.hlsUrl || json.m3u8Url || json.videoUrl || "";
         if (hlsUrl) {
           // Fetch the actual m3u8 content from the HLS URL
           const m3u8Res = await fetch(hlsUrl, {
@@ -81,44 +98,48 @@ export async function GET(request: NextRequest) {
             },
           });
 
-          let m3u8Content = await m3u8Res.text();
+          let fetchedContent = await m3u8Res.text();
 
           // If the response is itself an m3u8, rewrite URLs
-          if (m3u8Content.startsWith("#EXTM3U")) {
-            m3u8Content = rewriteIqiyiM3u8Urls(m3u8Content);
-          } else {
-            // Might be another JSON with a URL — try to parse
-            try {
-              const innerJson = JSON.parse(m3u8Content);
-              const innerUrl = innerJson.hlsUrl || innerJson.m3u8Url || innerJson.url || "";
-              if (innerUrl) {
-                const innerRes = await fetch(innerUrl, {
-                  headers: {
-                    "Referer": IQIYI_CDN_REFERER,
-                    "User-Agent": IQIYI_CDN_USER_AGENT,
-                  },
-                });
-                m3u8Content = await innerRes.text();
-                if (m3u8Content.startsWith("#EXTM3U")) {
-                  m3u8Content = rewriteIqiyiM3u8Urls(m3u8Content);
-                }
-              }
-            } catch {
-              // Not JSON, return as-is
-            }
+          if (fetchedContent.startsWith("#EXTM3U")) {
+            fetchedContent = rewriteIqiyiM3u8Urls(fetchedContent);
+            return new NextResponse(fetchedContent, {
+              status: 200,
+              headers: {
+                "Content-Type": "application/vnd.apple.mpegurl",
+                "Cache-Control": "no-cache",
+                "Access-Control-Allow-Origin": "*",
+              },
+            });
           }
 
-          return new NextResponse(m3u8Content, {
-            status: 200,
-            headers: {
-              "Content-Type": "application/vnd.apple.mpegurl",
-              "Cache-Control": "no-cache",
-              "Access-Control-Allow-Origin": "*",
-            },
-          });
+          // Might be another JSON with a URL or m3u8 content
+          try {
+            const innerJson = JSON.parse(fetchedContent);
+            const innerM3u8 = innerJson.m3u8 || "";
+            if (innerM3u8 && innerM3u8.includes("#EXTM3U")) {
+              const rewritten = rewriteIqiyiM3u8Urls(innerM3u8);
+              return new NextResponse(rewritten, {
+                status: 200,
+                headers: {
+                  "Content-Type": "application/vnd.apple.mpegurl",
+                  "Cache-Control": "no-cache",
+                  "Access-Control-Allow-Origin": "*",
+                },
+              });
+            }
+          } catch {
+            // Not JSON
+          }
         }
+
+        // No m3u8 content found — return error
+        return NextResponse.json(
+          { error: "No m3u8 content found in episode response" },
+          { status: 502 }
+        );
       } catch {
-        // Failed to parse episode response or fetch m3u8 — fall through to return JSON
+        // Failed to parse episode response — fall through to return JSON
       }
     }
 

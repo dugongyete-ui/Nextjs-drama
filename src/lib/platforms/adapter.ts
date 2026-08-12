@@ -174,14 +174,17 @@ const iqiyiApi: PlatformApi = {
   // iQIYI: resolve video URL from normalized episode
   resolveEpisodeVideoUrl: (episode, dramaId, episodeNum) => {
     // Strategy 1: HLS URL already in episode data (from /allepisode)
-    // These are external URLs — go through our proxy with ?hls=true
-    // so the proxy fetches the m3u8, rewrites CDN URLs, and returns m3u8 content
+    // The hlsUrl is typically /api/iqiyi/episode?id=...&albumId=...&ep=...&lang=en
+    // We need to append &hls=true so the proxy extracts the m3u8 content
     if (episode.hlsUrl) {
-      // If it's already a local proxy URL, just return it
+      if (episode.hlsUrl.startsWith("/api/iqiyi/episode")) {
+        // Already a local proxy episode URL — append &hls=true
+        const separator = episode.hlsUrl.includes("?") ? "&" : "?";
+        return `${episode.hlsUrl}${separator}hls=true`;
+      }
       if (episode.hlsUrl.startsWith("/api/")) return episode.hlsUrl;
       // External URL — route through our episode proxy with hls=true
-      // The proxy will fetch the m3u8 from this URL and rewrite all CDN URLs
-      return `${iqiyi.IQIYI_PROXY_PREFIX}/episode?id=${encodeURIComponent(String(dramaId))}&ep=${encodeURIComponent(String(episodeNum))}&hls=true`;
+      return `${iqiyi.IQIYI_PROXY_PREFIX}/episode?id=${encodeURIComponent(String(dramaId))}&albumId=${encodeURIComponent(String(dramaId))}&ep=${encodeURIComponent(String(episodeNum))}&hls=true`;
     }
     // Strategy 2: Direct MP4 URL (rare for iQIYI, but handle it)
     if (episode.mp4Url || episode.videoUrl) {
@@ -191,8 +194,7 @@ const iqiyiApi: PlatformApi = {
       return `/api/cdn?url=${encodeURIComponent(url)}`;
     }
     // Strategy 3: Fallback — construct proxy URL for /episode with ?hls=true
-    // The proxy fetches the m3u8 from hlsUrl in the JSON, rewrites URLs, returns m3u8
-    return `${iqiyi.IQIYI_PROXY_PREFIX}/episode?id=${encodeURIComponent(String(dramaId))}&ep=${encodeURIComponent(String(episodeNum))}&hls=true`;
+    return `${iqiyi.IQIYI_PROXY_PREFIX}/episode?id=${encodeURIComponent(String(dramaId))}&albumId=${encodeURIComponent(String(dramaId))}&ep=${encodeURIComponent(String(episodeNum))}&hls=true`;
   },
   // iQIYI doesn't have hot rank — fallback to trending
   getHotRank: (_type, lang) => iqiyi.api.getTrending(lang),
